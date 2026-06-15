@@ -1,0 +1,62 @@
+{
+    "last_run": {
+        "command": "full",
+        "context": {
+            "vendor": "xilinx",
+            "flow": "full",
+            "inputs": {
+                "project_mode": "2",
+                "project_xpr": "",
+                "fpga_part": "xc7z020clg400-1",
+                "board_part": "",
+                "project_name": "fpga_project",
+                "project_dir": "./fpga_project",
+                "source_files": "/root/Desktop/LOG_FPGA/XSA_scripts1/sample_testcase/rtl",
+                "ip_repo_paths": "",
+                "bd_tcl_script": "",
+                "git_enable": "n",
+                "output_bit": "",
+                "output_xsa": "",
+                "synth_jobs": "4",
+                "impl_jobs": "8",
+                "run_tests": "y",
+                "tb_top": "tb_adder",
+                "tb_mode": "2",
+                "tb_files": "",
+                "tb_dir": "/root/Desktop/LOG_FPGA/XSA_scripts1/sample_testcase/sim",
+                "tb_includes": "",
+                "tb_defines": "SIM=1",
+                "sim_mode": "post-implementation",
+                "sim_type": "functional",
+                "cmodel_dir": "/root/Desktop/LOG_FPGA/XSA_scripts1/sample_testcase/c_model",
+                "cmodel_stdin": "",
+                "cmodel_stdout": "",
+                "cmodel_clean_target": "clean",
+                "cmodel_run_target": "manual",
+                "cmodel_build_targets": "",
+                "cmodel_timeout": "900",
+                "cmodel_log": "./output/cmodel_run.log",
+                "result_file": "RESULT.txt",
+                "pass_pattern": "TEST_PASSED",
+                "fail_pattern": "TEST_FAILED",
+                "cmodel_out_fixed": "/tmp/fpga_cmodel_golden.txt",
+                "cmodel_log_dir": "./output/cmodel_logs",
+                "sim_log_dir": "./output/sim_logs",
+                "test_cases": [
+                    {
+                        "name": "TC1",
+                        "stdin": "sample_testcase/test_cases/tc1_input.txt",
+                        "stdout": "/tmp/tc1_out.txt"
+                    },
+                    {
+                        "name": "TC2",
+                        "stdin": "sample_testcase/test_cases/tc2_input.txt",
+                        "stdout": "/tmp/tc2_out.txt"
+                    }
+                ],
+                "_confirm": "y"
+            }
+        },
+        "timestamp": "2026-06-12T13:18:19.613889"
+    }
+}

@@ -1,0 +1,7 @@
+# compile verilog/system verilog design source files
+verilog xil_defaultlib  --include "../../../../../../../../../../opt/VIVADO/2025.2/data/rsb/busdef" -d "SIM=1" -d "CMODEL_OUT=\"/tmp/fpga_cmodel_golden.txt\"" \
+"tb_adder_func_impl.v" \
+"../../../../../../sample_testcase/sim/tb_adder.v" \
+
+# Do not sort compile order
+nosort
