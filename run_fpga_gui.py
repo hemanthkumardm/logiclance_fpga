@@ -321,10 +321,21 @@ class FPGAGUI(QMainWindow):
         self.f_impl_jobs.setValue(8)
         l_full.addRow("Implementation parallel jobs:", self.f_impl_jobs)
         
-        self.f_run_tests = QCheckBox("Run post-implementation regression tests?")
-        self.f_run_tests.setChecked(True)
+        self.f_run_tests = QCheckBox("Run post-implementation regression / verification tests?")
+        self.f_run_tests.setChecked(False)  # Off by default: pure RTL users get clean synth+impl without C-model
         self.f_run_tests.stateChanged.connect(self.update_visibility)
         l_full.addRow("", self.f_run_tests)
+
+        self.f_use_cmodel = QCheckBox("Compare against C-model golden (requires gcc + make)")
+        self.f_use_cmodel.setChecked(False)
+        self.f_use_cmodel.setToolTip("Only check this if you have a C reference model + Makefile. Leave off for self-checking Verilog testbenches.")
+        self.f_use_cmodel.stateChanged.connect(self.update_visibility)
+        l_full.addRow("", self.f_use_cmodel)
+
+        note = QLabel("<i>Tip: Leave both unchecked for synth + impl only (no simulation). Self-checking TBs can still be used via the Simulation flow.</i>")
+        note.setStyleSheet("color:#555; font-size:8.5pt; padding-left:4px;")
+        l_full.addRow(note)
+
         self.form_layout.addWidget(self.grp_full)
         
         self.form_layout.addStretch()
@@ -1093,13 +1104,15 @@ class FPGAGUI(QMainWindow):
         self.set_row_visible(self.f_tb_files, l_tb, not tb_mode_dir)
         self.set_row_visible(self.f_tb_dir, l_tb, tb_mode_dir)
         
-        # C-Model visibility
-        needs_cmod = (flow_idx in [1, 2]) or (is_full and self.f_run_tests.isChecked())
+        # C-Model visibility - only if user explicitly wants C golden (and is doing tests in full flow)
+        wants_cmod = getattr(self, 'f_use_cmodel', None) and self.f_use_cmodel.isChecked()
+        needs_cmod = (flow_idx in [1, 2]) or (is_full and self.f_run_tests.isChecked() and wants_cmod)
         self.grp_cmod.setVisible(needs_cmod)
-        l_cmod = self.grp_cmod.layout()
-        self.set_row_visible(self.f_cmod_stdin, l_cmod, flow_idx == 1) # only simple cmod needs direct stdin
+        if needs_cmod:
+            l_cmod = self.grp_cmod.layout()
+            self.set_row_visible(self.f_cmod_stdin, l_cmod, flow_idx == 1) # only simple cmod needs direct stdin
         
-        # Regression visibility
+        # Regression visibility (test cases / result checking)
         needs_reg = (flow_idx == 2) or (is_full and self.f_run_tests.isChecked())
         self.grp_reg.setVisible(needs_reg)
 
@@ -1155,6 +1168,9 @@ class FPGAGUI(QMainWindow):
         inputs["cmodel_out_fixed"] = self.f_cmod_out_fixed.text()
         inputs["cmodel_log_dir"] = self.f_cmod_log_dir.text()
         inputs["sim_log_dir"] = self.f_sim_log_dir.text()
+
+        # Explicit flag so backend and verification know whether C-model is intended
+        inputs["use_cmodel"] = bool(getattr(self, 'f_use_cmodel', None) and self.f_use_cmodel.isChecked())
         
         test_cases = []
         for i in range(self.tc_table.rowCount()):
@@ -1225,6 +1241,9 @@ class FPGAGUI(QMainWindow):
         set_val(self.f_cmod_out_fixed, "cmodel_out_fixed")
         set_val(self.f_cmod_log_dir, "cmodel_log_dir")
         set_val(self.f_sim_log_dir, "sim_log_dir")
+
+        if hasattr(self, "f_use_cmodel"):
+            self.f_use_cmodel.setChecked(bool(inputs.get("use_cmodel", False)))
         
         # Load test cases
         tcs = inputs.get("test_cases", [])
@@ -1248,8 +1267,8 @@ class FPGAGUI(QMainWindow):
         flow_idx = self.flow_combo.currentIndex()
         flow_key = ["sim", "cmod", "regression", "full"][flow_idx]
 
-        # Verify C-model tools if this flow uses C-model
-        uses_cmodel = flow_idx in (1, 2, 3) and bool(inputs.get("cmodel_dir"))
+        # Verify C-model tools ONLY if the user explicitly enabled C-model golden + provided a dir
+        uses_cmodel = bool(inputs.get("use_cmodel")) and bool(inputs.get("cmodel_dir"))
         if uses_cmodel:
             from fpga_tool.flow_utils import verify_environment
             if not verify_environment(require_vivado=False, require_cmodel_tools=True):

@@ -694,7 +694,7 @@ def run_xilinx_full_flow(logger, smart_in, run_id):
     config = _collect_full_flow_inputs(logger, smart_in)
 
     # Testbench (needed if running regression)
-    run_tests = smart_in.get_bool("Run post-implementation regression tests?", "run_tests", default=True)
+    run_tests = smart_in.get_bool("Run post-implementation regression / verification tests?", "run_tests", default=False)
 
     if run_tests:
         # Collect TB info
@@ -718,9 +718,22 @@ def run_xilinx_full_flow(logger, smart_in, run_id):
         config["sim_mode"] = "post-implementation"
         config["sim_type"] = "functional"
 
-        # C-Model & regression inputs
-        config.update(_collect_cmodel_inputs(logger, smart_in))
-        config.update(_collect_regression_inputs(logger, smart_in))
+        # C-Model only if user explicitly wants it (non-C-model users can still do self-checking TB sims)
+        use_cmodel = smart_in.get_bool("Use C-model as golden reference (gcc/make required)?", "use_cmodel", default=False)
+        if use_cmodel:
+            config.update(_collect_cmodel_inputs(logger, smart_in))
+            config.update(_collect_regression_inputs(logger, smart_in))
+            config["cmodel_enable"] = True
+        else:
+            config["cmodel_enable"] = False
+            # Still collect regression table (test case names) so the Tcl regression block can run
+            # a plain post-impl sim + look for RESULT.txt written by a self-checking TB.
+            # No cmodel collector = no gcc/make requirement and no halt.
+            try:
+                reg = _collect_regression_inputs(logger, smart_in)
+                config["test_cases"] = reg.get("test_cases", [])
+            except Exception:
+                config["test_cases"] = []
     else:
         config["tb_top"] = ""
         config["tb_files"] = []
