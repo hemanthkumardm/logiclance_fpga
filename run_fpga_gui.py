@@ -1152,7 +1152,7 @@ class FPGAGUI(QMainWindow):
             inputs["synth_jobs"] = str(self.f_synth_jobs.value())
             inputs["impl_jobs"] = str(self.f_impl_jobs.value())
             inputs["run_tests"] = "y" if self.f_run_tests.isChecked() else "n"
-        inputs["use_cmodel"] = "y" if getattr(self, 'f_use_cmodel', None) and self.f_use_cmodel.isChecked() else "n"
+            inputs["use_cmodel"] = "y" if getattr(self, 'f_use_cmodel', None) and self.f_use_cmodel.isChecked() else "n"
         else:
             inputs["project_xpr"] = self.f_project_xpr.text()
             
