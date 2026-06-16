@@ -623,6 +623,39 @@ Check the generated config to verify inputs were captured correctly:
 cat output/fpga_<timestamp>/_vivado_config.tcl
 ```
 
+### GUI fails to start with "Could not load the Qt platform plugin 'xcb'"
+
+This is extremely common when you clone the repo and run it on a *different* Linux laptop (Ubuntu 22.04/24.04, Fedora, Pop!_OS, any Gnome/Wayland desktop).
+
+**Error looks like:**
+```
+qt.qpa.plugin: Could not load the Qt platform plugin "xcb" ...
+Available platform plugins are: ... xcb ...
+Aborted (core dumped)
+```
+
+**Fix (on the target machine):**
+
+```bash
+sudo apt update
+sudo apt install -y \
+    libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+    libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 \
+    libxkbcommon-x11-0 libgl1-mesa-glx
+```
+
+Then try again:
+```bash
+./run_fpga
+```
+
+**Alternative (force Wayland):**
+```bash
+QT_QPA_PLATFORM=wayland ./run_fpga
+```
+
+The `setup.sh` script now prints this advice automatically on Linux.
+
 ---
 
 ## LogicLance Integration

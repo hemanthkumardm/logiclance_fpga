@@ -26,6 +26,13 @@ import os
 import sys
 
 if __name__ == "__main__":
+    # Make Qt GUI robust across different Linux desktops (X11 vs Wayland).
+    # Many modern distros (Ubuntu 22.04+, Gnome on Wayland) need explicit platform selection.
+    # We default to "xcb" (X11) for maximum compatibility.
+    # Users on pure Wayland can override:  QT_QPA_PLATFORM=wayland python3 run_fpga
+    if os.environ.get("QT_QPA_PLATFORM") is None:
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+
     # Launch the GUI (CLI features removed)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     gui_script = os.path.join(script_dir, "run_fpga_gui.py")

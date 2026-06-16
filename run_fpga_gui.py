@@ -16,6 +16,20 @@ import subprocess
 from datetime import datetime
 import re
 
+# -----------------------------------------------------------------------------
+# Qt platform robustness (critical for running on other Linux laptops)
+# -----------------------------------------------------------------------------
+# On Wayland-based desktops (Gnome, KDE Plasma 6, etc.) PyQt5 often fails with:
+#   "Could not load the Qt platform plugin "xcb" ... Aborted (core dumped)"
+# We force "xcb" by default (best compatibility).
+# If you are on a pure Wayland session and want native Wayland:
+#     export QT_QPA_PLATFORM=wayland
+#     python3 run_fpga_gui.py
+#
+# This must be set *before* any PyQt5 import.
+if os.environ.get("QT_QPA_PLATFORM") is None:
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QComboBox, QPushButton, 
                              QLineEdit, QFileDialog, QGroupBox, QFormLayout,
@@ -1345,7 +1359,43 @@ def main():
     print("\n[Startup] Verifying external dependencies...")
     verify_environment(require_vivado=True, require_cmodel_tools=False)
 
-    app = QApplication(sys.argv)
+    try:
+        app = QApplication(sys.argv)
+    except Exception as e:
+        print("\n" + "="*70)
+        print("FAILED TO START Qt GUI")
+        print("="*70)
+        print("This is a very common issue when running the tool on a *different* Linux")
+        print("laptop or desktop (especially Ubuntu 22.04+, Fedora, or any Gnome/Wayland system).")
+        print()
+        print("Error details:")
+        print(f"  {e}")
+        print()
+        print("Quick fixes (try in this order):")
+        print()
+        print("1. Install the missing XCB system libraries (most common fix):")
+        print("   sudo apt update")
+        print("   sudo apt install -y \\")
+        print("       libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \\")
+        print("       libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 \\")
+        print("       libxkbcommon-x11-0 libgl1-mesa-glx")
+        print()
+        print("2. Force Wayland platform (if you are on a modern Wayland desktop):")
+        print("   QT_QPA_PLATFORM=wayland python3 run_fpga_gui.py")
+        print()
+        print("3. If you used a virtualenv or the one from setup.sh, try reinstalling PyQt5:")
+        print("   pip install --force-reinstall PyQt5")
+        print()
+        print("4. As a last resort (no GUI at all):")
+        print("   QT_QPA_PLATFORM=offscreen python3 run_fpga_gui.py")
+        print()
+        print("After installing the packages above, re-run:")
+        print("   ./run_fpga")
+        print("   or")
+        print("   python3 run_fpga_gui.py")
+        print("="*70)
+        sys.exit(1)
+
     gui = FPGAGUI()
     gui.show()
     sys.exit(app.exec_())

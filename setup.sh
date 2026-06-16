@@ -82,6 +82,24 @@ for tool, path in deps.items():
         print(f'  ❌ {tool.upper():8} → NOT FOUND')
 "
 
+# Linux-specific: Qt / XCB runtime libraries (very common on other laptops)
+if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    echo
+    echo -e "${YELLOW}[Linux only] GUI (PyQt5) often needs extra system libraries on other machines.${NC}"
+    echo "If you later see the error:"
+    echo "  'Could not load the Qt platform plugin \"xcb\"'"
+    echo "Run this on the target laptop:"
+    echo
+    echo "  sudo apt update"
+    echo "  sudo apt install -y \\"
+    echo "      libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \\"
+    echo "      libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 \\"
+    echo "      libxkbcommon-x11-0 libgl1-mesa-glx"
+    echo
+    echo "Then re-run the tool."
+    echo
+fi
+
 echo
 echo -e "${BLUE}──────────────────────────────────────────────────────────────${NC}"
 echo -e "${GREEN}Setup completed!${NC}"
@@ -95,6 +113,10 @@ echo "    run-fpga-gui"
 echo
 echo "Tip: If Vivado is not found, set the environment variable:"
 echo "    export XILINX_VIVADO=/opt/VIVADO/2025.2/Vivado"
+echo
+echo "Important: When running on a *different* laptop (especially Ubuntu/Gnome/Wayland),"
+echo "the GUI may fail with an 'xcb' plugin error. The required system packages"
+echo "are listed above during setup. Install them and try again."
 echo
 echo -e "${BLUE}──────────────────────────────────────────────────────────────${NC}"
 echo
