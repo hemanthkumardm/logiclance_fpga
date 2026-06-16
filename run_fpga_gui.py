@@ -1152,6 +1152,7 @@ class FPGAGUI(QMainWindow):
             inputs["synth_jobs"] = str(self.f_synth_jobs.value())
             inputs["impl_jobs"] = str(self.f_impl_jobs.value())
             inputs["run_tests"] = "y" if self.f_run_tests.isChecked() else "n"
+        inputs["use_cmodel"] = "y" if getattr(self, 'f_use_cmodel', None) and self.f_use_cmodel.isChecked() else "n"
         else:
             inputs["project_xpr"] = self.f_project_xpr.text()
             
@@ -1183,8 +1184,7 @@ class FPGAGUI(QMainWindow):
         inputs["cmodel_log_dir"] = self.f_cmod_log_dir.text()
         inputs["sim_log_dir"] = self.f_sim_log_dir.text()
 
-        # Explicit flag so backend and verification know whether C-model is intended
-        inputs["use_cmodel"] = bool(getattr(self, 'f_use_cmodel', None) and self.f_use_cmodel.isChecked())
+        # test_cases collected below
         
         test_cases = []
         for i in range(self.tc_table.rowCount()):
@@ -1257,7 +1257,20 @@ class FPGAGUI(QMainWindow):
         set_val(self.f_sim_log_dir, "sim_log_dir")
 
         if hasattr(self, "f_use_cmodel"):
-            self.f_use_cmodel.setChecked(bool(inputs.get("use_cmodel", False)))
+            val = inputs.get("use_cmodel", "n")
+            if isinstance(val, str):
+                checked = val.lower() in ("y", "yes", "1", "true")
+            else:
+                checked = bool(val)
+            self.f_use_cmodel.setChecked(checked)
+        
+        if hasattr(self, "f_run_tests"):
+            val = inputs.get("run_tests", "n")
+            if isinstance(val, str):
+                checked = val.lower() in ("y", "yes", "1", "true")
+            else:
+                checked = bool(val)
+            self.f_run_tests.setChecked(checked)
         
         # Load test cases
         tcs = inputs.get("test_cases", [])
@@ -1282,7 +1295,10 @@ class FPGAGUI(QMainWindow):
         flow_key = ["sim", "cmod", "regression", "full"][flow_idx]
 
         # Verify C-model tools ONLY if the user explicitly enabled C-model golden + provided a dir
-        uses_cmodel = bool(inputs.get("use_cmodel")) and bool(inputs.get("cmodel_dir"))
+        use_cmodel_val = inputs.get("use_cmodel", False)
+        if isinstance(use_cmodel_val, str):
+            use_cmodel_val = use_cmodel_val.lower() in ("y", "yes", "1", "true")
+        uses_cmodel = bool(use_cmodel_val) and bool(inputs.get("cmodel_dir"))
         if uses_cmodel:
             from fpga_tool.flow_utils import verify_environment
             if not verify_environment(require_vivado=False, require_cmodel_tools=True):

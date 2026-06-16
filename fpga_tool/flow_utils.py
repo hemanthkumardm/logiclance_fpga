@@ -156,12 +156,20 @@ class SmartInput:
         return [x.strip() for x in raw.split() if x.strip()]
 
     def get_bool(self, prompt, key, default=True):
-        """Prompt for yes/no."""
-        default_str = "Y/n" if default else "y/N"
-        raw = self.get(prompt, key, default=default_str)
-        if raw in ("Y/n", "y/N"):
+        """Prompt for yes/no. Robust to stored bool or str 'y'/'n' from GUI rerun data."""
+        raw = self.get(prompt, key, default= "Y/n" if default else "y/N")
+        if isinstance(raw, bool):
+            return raw
+        if not isinstance(raw, str):
+            raw = str(raw)
+        raw_lower = raw.lower().strip()
+        if raw_lower in ("y/n", "y/n"):
             return default
-        return raw.lower() in ("y", "yes", "1", "true")
+        if raw_lower in ("y", "yes", "1", "true"):
+            return True
+        if raw_lower in ("n", "no", "0", "false"):
+            return False
+        return default
 
     def get_int(self, prompt, key, default=4):
         """Prompt for integer."""
