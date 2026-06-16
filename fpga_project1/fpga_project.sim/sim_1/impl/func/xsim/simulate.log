@@ -1,6 +1,0 @@
-Time resolution is 1 ps
-RTL: a=       100 b=       200 sum=       300
-CMOD: expected_sum=        300
-SUCCESS: RTL matches C-model!
-$finish called at time : 120 ns : File "/root/Desktop/LOG_FPGA/XSA_scripts/sample_testcase/sim/tb_adder.v" Line 58
-INFO: xsimkernel Simulation Memory Usage: 279308 KB (Peak: 336320 KB), Simulation CPU Usage: 660 ms

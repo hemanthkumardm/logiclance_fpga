@@ -132,6 +132,14 @@ def generate_vivado_config_tcl(config, output_path, tool_dir=None):
         "synth_jobs":       "SYNTH_JOBS",
         "impl_jobs":        "IMPL_JOBS",
         "output_log_dir":   "OUTPUT_LOG_DIR",
+        # Phase 3 strategy injection for optimizer
+        "synth_strategy":   "SYNTH_STRATEGY",
+        "impl_strategy":    "IMPL_STRATEGY",
+        "synth_directive":  "SYNTH_DIRECTIVE",
+        "impl_directive":   "IMPL_DIRECTIVE",
+        # Phase 3: auto XDC creation when missing
+        "auto_xdc_file":    "AUTO_XDC_FILE",
+        "force_full_impl":  "FORCE_FULL_IMPL",
     }
 
     # Group outputs by section
@@ -147,6 +155,10 @@ def generate_vivado_config_tcl(config, output_path, tool_dir=None):
                        "cmodel_out_fixed", "cmodel_log_dir", "sim_log_dir"],
         "GIT":        ["git_enable", "git_repo", "git_commit", "git_dest", "git_subdir"],
         "OUTPUT":     ["output_bit", "output_xsa", "synth_jobs", "impl_jobs", "output_log_dir"],
+        # Phase 3
+        "STRATEGY":   ["synth_strategy", "impl_strategy", "synth_directive", "impl_directive"],
+        "CONSTRAINTS": ["auto_xdc_file"],
+        "FORCE": ["force_full_impl"],
     }
 
     for section_name, keys in sections.items():

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "logiclance-fpga"
+version = "1.1.0"
+description = "FPGA Automation Tool for Xilinx/AMD Vivado (GUI + intelligent features)"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "LogicLance © 2026"}
+authors = [
+  {name = "Hemanth Kumar DM"}
+]
+dependencies = [
+    "PyQt5>=5.15.0",
+    "rich>=10.0.0",
+]
+
+[project.scripts]
+run-fpga-gui = "run_fpga_gui:main"
+
+[tool.setuptools.packages.find]
+include = ["fpga_tool*"]

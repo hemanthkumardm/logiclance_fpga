@@ -1,5 +1,0 @@
-INFO: [VRFC 10-2263] Analyzing Verilog file "/root/Desktop/LOG_FPGA/XSA_scripts/fpga_project1/fpga_project.sim/sim_1/impl/func/xsim/tb_adder_func_impl.v" into library xil_defaultlib
-INFO: [VRFC 10-311] analyzing module adder
-INFO: [VRFC 10-311] analyzing module glbl
-INFO: [VRFC 10-2263] Analyzing Verilog file "/root/Desktop/LOG_FPGA/XSA_scripts/sample_testcase/sim/tb_adder.v" into library xil_defaultlib
-INFO: [VRFC 10-311] analyzing module tb_adder

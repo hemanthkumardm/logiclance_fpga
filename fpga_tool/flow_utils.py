@@ -19,6 +19,12 @@ import subprocess
 import readline
 from datetime import datetime
 
+# Re-export for convenience (HistoryDB is the Phase 1 memory)
+try:
+    from fpga_tool.intelligence.history import HistoryDB
+except Exception:
+    HistoryDB = None  # graceful
+
 # ──────────────────── ANSI Colors ────────────────────
 
 BLUE   = '\033[94m'
@@ -244,7 +250,7 @@ class ArtifactManager:
             self.archive_file(f, sub)
 
 
-# ──────────────────── Vivado Detection ────────────────────
+# ──────────────────── Dependency Verification ────────────────────
 
 def find_vivado():
     """
@@ -275,6 +281,83 @@ def find_vivado():
                     return candidate
 
     return None
+
+
+def find_gcc():
+    """Find gcc C compiler (used by C-model flows)."""
+    return shutil.which("gcc")
+
+
+def find_make():
+    """Find GNU make (used by C-model flows)."""
+    return shutil.which("make")
+
+
+def check_dependencies():
+    """
+    Check all external tools required by the FPGA Automation Tool.
+    Returns a dict with tool name -> found_path or None.
+    """
+    return {
+        "vivado": find_vivado(),
+        "gcc": find_gcc(),
+        "make": find_make(),
+    }
+
+
+def verify_environment(logger=None, require_vivado=True, require_cmodel_tools=False):
+    """
+    Verify that required external tools are available.
+    Prints status using the provided logger (or prints to stdout).
+    Returns True if all required tools are present.
+    """
+    deps = check_dependencies()
+    all_ok = True
+
+    def log(msg, level="info"):
+        if logger:
+            if level == "warn":
+                logger.warn(msg)
+            elif level == "error":
+                logger.error(msg)
+            else:
+                logger.info(msg)
+        else:
+            print(msg)
+
+    log("=== Dependency Verification ===")
+
+    # Vivado (always required for FPGA flows)
+    if deps["vivado"]:
+        log(f"✅ Vivado found: {deps['vivado']}")
+    else:
+        log("❌ Vivado NOT FOUND. Set $XILINX_VIVADO or add 'vivado' to PATH.", "error")
+        all_ok = False
+        if require_vivado:
+            return False
+
+    # C-model tools (gcc + make) - only strictly required if using C-model flows
+    cmodel_ok = bool(deps["gcc"] and deps["make"])
+    if deps["gcc"]:
+        log(f"✅ gcc found: {deps['gcc']}")
+    else:
+        log("⚠️  gcc NOT FOUND. C-model flows will fail.", "warn")
+    if deps["make"]:
+        log(f"✅ make found: {deps['make']}")
+    else:
+        log("⚠️  make NOT FOUND. C-model flows will fail.", "warn")
+
+    if require_cmodel_tools and not cmodel_ok:
+        log("C-model tools (gcc + make) are required for this flow.", "error")
+        all_ok = False
+
+    if all_ok:
+        log("✅ All required external dependencies appear available.")
+    else:
+        log("⚠️  Some dependencies are missing. Flows may fail.")
+
+    log("================================")
+    return all_ok
 
 
 # ──────────────────── Tab Completion ────────────────────

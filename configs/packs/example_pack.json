@@ -1,0 +1,22 @@
+{
+  "name": "example_advanced",
+  "version": "1.0",
+  "description": "Example knowledge pack for advanced FPGA patterns (Phase 3)",
+  "recommendations": [
+    {
+      "condition": {"no_clock": {"gt": 0}},
+      "message": "Pack: Always constrain all clocks explicitly. Consider set_clock_groups for async domains."
+    },
+    {
+      "condition": {"wns": {"lt": -1.0}},
+      "message": "Pack: For large negative slack, prioritize retiming over higher effort jobs first."
+    }
+  ],
+  "strategy_prefs": {
+    "timing_critical": ["ExtraTiming", "Aggressive"],
+    "default": ["Default"]
+  },
+  "xdc_templates": {
+    "common_false_paths": ["reset", "rst_n"]
+  }
+}

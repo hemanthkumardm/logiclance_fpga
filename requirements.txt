@@ -1,0 +1,14 @@
+# Requirements for FPGA Automation Tool (GUI-only version)
+# Install with: pip install -r requirements.txt
+
+# Required for the graphical interface
+PyQt5>=5.15.0
+
+# Optional but recommended for nicer colored console output in the Live Log
+# The tool falls back gracefully if not installed.
+rich>=10.0.0
+
+# Note:
+# - Vivado must be installed separately and available in PATH or via $XILINX_VIVADO
+# - For C-model flows you also need a C compiler (gcc) and make
+# - No other Python packages are required (the core intelligence layer is stdlib only)

@@ -69,12 +69,33 @@ if {[info exists PROJECT_XPR] && $PROJECT_XPR ne ""} {
     update_compile_order -fileset sources_1
 }
 
+# ── Auto XDC (Phase 3 smart behavior) ──
+if {[info exists AUTO_XDC_FILE] && $AUTO_XDC_FILE ne "" && [file exists $AUTO_XDC_FILE]} {
+    fpga_log_info "Auto-adding generated XDC (no constraints were present): $AUTO_XDC_FILE"
+    add_files -fileset constrs_1 $AUTO_XDC_FILE
+    set_property used_in_synthesis true [get_files $AUTO_XDC_FILE]
+    set_property used_in_implementation true [get_files $AUTO_XDC_FILE]
+    set_property file_type "XDC" [get_files $AUTO_XDC_FILE]
+}
+
 # ── Step 3: Synthesis ──
 fpga_log_info "Launching synthesis..."
 set _synth_jobs [expr {[info exists SYNTH_JOBS] ? $SYNTH_JOBS : 4}]
 
 if {[string equal [get_runs -quiet synth_1] ""]} {
-    create_run -name synth_1 -flow {Vivado Synthesis 2024} -strategy "Vivado Synthesis Defaults"
+    set _synth_strat [expr {[info exists SYNTH_STRATEGY] && $SYNTH_STRATEGY ne "" ? $SYNTH_STRATEGY : "Vivado Synthesis Defaults"}]
+    if {[info exists SYNTH_DIRECTIVE] && $SYNTH_DIRECTIVE ne ""} {
+        create_run -name synth_1 -flow {Vivado Synthesis 2024} -strategy $_synth_strat -directive $SYNTH_DIRECTIVE
+    } else {
+        create_run -name synth_1 -flow {Vivado Synthesis 2024} -strategy $_synth_strat
+    }
+} else {
+    # Auto-reset for re-runs (common when using GUI "Load Last Run Config" on existing project)
+    fpga_log_info "Resetting existing synth_1 run before launch..."
+    reset_run synth_1
+}
+if {[info exists FORCE_FULL_IMPL] && $FORCE_FULL_IMPL} {
+    fpga_log_info "FORCE_FULL_IMPL active (auto XDC just created) — ensuring fresh constrained implementation."
 }
 current_run -synthesis [get_runs synth_1]
 launch_runs synth_1 -jobs $_synth_jobs
@@ -88,7 +109,19 @@ fpga_log_info "Launching implementation..."
 set _impl_jobs [expr {[info exists IMPL_JOBS] ? $IMPL_JOBS : 8}]
 
 if {[string equal [get_runs -quiet impl_1] ""]} {
-    create_run -name impl_1 -flow {Vivado Implementation 2024} -strategy "Vivado Implementation Defaults" -parent_run synth_1
+    set _impl_strat [expr {[info exists IMPL_STRATEGY] && $IMPL_STRATEGY ne "" ? $IMPL_STRATEGY : "Vivado Implementation Defaults"}]
+    if {[info exists IMPL_DIRECTIVE] && $IMPL_DIRECTIVE ne ""} {
+        create_run -name impl_1 -flow {Vivado Implementation 2024} -strategy $_impl_strat -directive $IMPL_DIRECTIVE -parent_run synth_1
+    } else {
+        create_run -name impl_1 -flow {Vivado Implementation 2024} -strategy $_impl_strat -parent_run synth_1
+    }
+} else {
+    # Auto-reset for re-runs (common when using GUI "Load Last Run Config" on existing project)
+    fpga_log_info "Resetting existing impl_1 run before launch..."
+    reset_run impl_1
+}
+if {[info exists FORCE_FULL_IMPL] && $FORCE_FULL_IMPL} {
+    fpga_log_info "FORCE_FULL_IMPL active (auto XDC just created) — ensuring fresh constrained implementation."
 }
 current_run -implementation [get_runs impl_1]
 
@@ -138,6 +171,33 @@ if {[info exists TEST_CASES] && [llength $TEST_CASES]} {
         catch { stop }; catch { close_sim }; catch { reset_simulation -simset sim_1 }
         current_run -implementation [get_runs impl_1]
         launch_simulation -simset sim_1 -mode $SIM_MODE -type $SIM_TYPE
+
+        # Robust find + copy of RESULT.txt (ported from regression.tcl)
+        set sim_root [file join [get_property DIRECTORY [current_project]] [current_project].sim]
+
+        proc find_result {dir} {
+            foreach f [glob -nocomplain -directory $dir -type f RESULT.txt] { return $f }
+            foreach d [glob -nocomplain -directory $dir -type d *] {
+                set r [find_result $d]; if {$r ne ""} { return $r }
+            }
+            return ""
+        }
+
+        set generated_res [find_result $sim_root]
+
+        if {$generated_res ne ""} {
+            puts "INFO: Found testbench result at: $generated_res"
+            if {[info exists RESULT_FILE] && $RESULT_FILE ne ""} {
+                set dest [fpga_nrm $RESULT_FILE]
+                if {[catch { file copy -force $generated_res $dest } e]} {
+                    puts "WARNING: Failed to copy result to $dest: $e"
+                } else {
+                    puts "INFO: Copied result to $dest"
+                }
+            }
+        } else {
+            puts "WARNING: RESULT.txt not found anywhere in $sim_root"
+        }
 
         set verdict [fpga_read_result_file $RESULT_FILE $PASS_PATTERN $FAIL_PATTERN]
         if {$verdict == 1} {

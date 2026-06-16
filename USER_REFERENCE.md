@@ -189,6 +189,9 @@ Displays:
 | `--rerun` | Repeat the last run with saved inputs | `--rerun` |
 | `--generate-config` | Write `fpga_config.tcl` template to current dir | `--generate-config` |
 | `--verbose` | Enable debug-level output | `--verbose` |
+| `--watch` | Phase 3: Continuous monitoring mode with intelligent delta-driven re-runs | `--watch --flow regression` |
+| `--optimize` / `--opt` | Phase 3: Enable optimizer for history-guided strategy search and limited auto-retries on failure | `--optimize --flow full` |
+| `--no-intel` | Disable all intelligence features (design model, reports, optimizer, watch) | `--no-intel --flow sim` |
 
 ### Flow Name Shortcuts
 

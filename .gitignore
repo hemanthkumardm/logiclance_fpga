@@ -1,0 +1,97 @@
+# LogicLance FPGA - Non-AI Advanced XSA Automation
+# Git ignore (keeps the repo clean of generated / binary / local artifacts)
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# Vivado / FPGA tool generated (the user explicitly wanted these removed/unnecessary dirs cleaned)
+fpga_project/
+fpga_project*/
+output/
+logs/
+*.jou
+*.log
+*.pb
+*.wdb
+*.wdf
+*.rpx
+*.rpt
+!*.example.rpt
+.Xil/
+vivado*.*
+*.str
+*.vdi
+*.dcp
+*.xdc  # user XDC files are usually committed in real projects; ignore here to avoid leaking board-specific ones. Add exceptions as needed.
+*.xpr   # project files can be large and contain absolute paths
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+
+# Tool state and temp
+.fpga_tool_state.json
+.sim_tools/
+*.bak
+*~
+
+# Environment / secrets (never commit real keys)
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AI experiment (we deliberately deleted the LOG_API test version; ignore if recreated locally)
+LOG_API/
+log_api/
+ai_*/
+
+# Test leftovers and large binaries
+test_phase3_leftovers.py
+*.bin
+*.elf
+*.o
+*.a
+
+# C model build artifacts (when present)
+cmodel_logs/
+adder_model
+main.o

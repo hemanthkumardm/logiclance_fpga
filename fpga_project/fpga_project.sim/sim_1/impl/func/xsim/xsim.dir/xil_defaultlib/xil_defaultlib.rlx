@@ -1,6 +1,0 @@
-0.7
-2020.2
-Nov 14 2025
-12:36:23
-/root/Desktop/LOG_FPGA/XSA_scripts1/fpga_project/fpga_project.sim/sim_1/impl/func/xsim/tb_adder_func_impl.v,1781250555,verilog,,/root/Desktop/LOG_FPGA/XSA_scripts1/sample_testcase/sim/tb_adder.v,,adder;glbl,,,../../../../../../../../../../opt/VIVADO/2025.2/data/rsb/busdef,CMODEL_OUT=\"/tmp/fpga_cmodel_golden.txt\";SIM=1,,,,
-/root/Desktop/LOG_FPGA/XSA_scripts1/sample_testcase/sim/tb_adder.v,1781250359,verilog,,,,tb_adder,,,../../../../../../../../../../opt/VIVADO/2025.2/data/rsb/busdef,CMODEL_OUT=\"/tmp/fpga_cmodel_golden.txt\";SIM=1,,,,

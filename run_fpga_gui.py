@@ -20,16 +20,20 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QComboBox, QPushButton, 
                              QLineEdit, QFileDialog, QGroupBox, QFormLayout,
                              QScrollArea, QCheckBox, QSpinBox, QTextEdit, 
-                             QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView)
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QTimer
-from PyQt5.QtGui import QFont, QColor, QTextCursor
+                             QMessageBox, QTableWidget, QTableWidgetItem, QHeaderView,
+                             QListWidget, QTabWidget)
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QTimer, QUrl
+from PyQt5.QtGui import QFont, QColor, QTextCursor, QDesktopServices
 
 # Ensure package is importable
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 if _script_dir not in sys.path:
     sys.path.insert(0, _script_dir)
 
-from fpga_tool.flow_utils import SimLogger, SmartInput, CommandManager, find_vivado
+from fpga_tool.flow_utils import (
+    SimLogger, SmartInput, CommandManager, find_vivado,
+    verify_environment,
+)
 from fpga_tool.run_fpga_xilinx import (
     run_xilinx_sim,
     run_xilinx_cmod_sim,
@@ -65,8 +69,37 @@ class FPGAGUI(QMainWindow):
         self.main_layout = QVBoxLayout(self.main_widget)
         
         self.setup_top_bar()
-        self.setup_scroll_area()
-        self.setup_log_area()
+        
+        # Main tab widget
+        self.tab_widget = QTabWidget()
+        self.main_layout.addWidget(self.tab_widget, stretch=1)
+        
+        # Tab 1: Configuration (forms)
+        self.config_tab = QWidget()
+        self.config_tab_layout = QVBoxLayout(self.config_tab)
+        scroll = self.setup_scroll_area()
+        if scroll:
+            self.config_tab_layout.addWidget(scroll)
+        self.tab_widget.addTab(self.config_tab, "Configuration")
+        
+        # Tab 2: Live Console
+        log_tab = QWidget()
+        log_lay = QVBoxLayout(log_tab)
+        log_grp = self.setup_log_area()
+        if log_grp:
+            log_lay.addWidget(log_grp)
+        self.tab_widget.addTab(log_tab, "Live Console")
+        
+        # Tab 3: Results Sessions (dedicated tab for past runs, reports, comparisons, etc.)
+        results_tab = QWidget()
+        results_lay = QVBoxLayout(results_tab)
+        reports_grp = self.setup_reports_area()
+        if reports_grp:
+            results_lay.addWidget(reports_grp)
+        self.tab_widget.addTab(results_tab, "Results Sessions")
+        
+        # Optional: start with the Results Sessions tab visible (uncomment if you want)
+        # self.tab_widget.setCurrentIndex(2)
         
         self.flow_combo.currentIndexChanged.connect(self.update_visibility)
         self.update_visibility()
@@ -296,7 +329,7 @@ class FPGAGUI(QMainWindow):
         
         self.form_layout.addStretch()
         scroll.setWidget(content)
-        self.main_layout.addWidget(scroll, stretch=2)
+        return scroll
 
     def setup_log_area(self):
         log_grp = QGroupBox("Live Console Output")
@@ -305,12 +338,12 @@ class FPGAGUI(QMainWindow):
         self.log_text.setReadOnly(True)
         self.log_text.setFont(QFont("Courier New", 10))
         log_layout.addWidget(self.log_text)
-        self.main_layout.addWidget(log_grp, stretch=1)
         
         # Setup stdout redirection
         self.emitter = LogEmitter()
         self.emitter.log_signal.connect(self.append_log)
         self.emitter.finished_signal.connect(lambda: self.run_btn.setEnabled(True))
+        self.emitter.finished_signal.connect(self.refresh_reports)  # refresh the Results Sessions tab after each run
         
         class StreamRedirect:
             def __init__(self, emitter):
@@ -322,6 +355,645 @@ class FPGAGUI(QMainWindow):
                 
         self.original_stdout = sys.stdout
         sys.stdout = StreamRedirect(self.emitter)
+        
+        return log_grp   # return it so the caller can place it in the correct tab
+
+    def setup_reports_area(self):
+        reports_grp = QGroupBox("Reports & Outputs (View directly in GUI)")
+        reports_layout = QVBoxLayout(reports_grp)
+
+        # === Runs Table (multi-column, supports multi-select for compare) ===
+        self.reports_table = QTableWidget()
+        self.reports_table.setColumnCount(4)
+        self.reports_table.setHorizontalHeaderLabels(["Run", "Timestamp", "Artifacts", "Size (KB)"])
+        self.reports_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.reports_table.setSelectionMode(QTableWidget.ExtendedSelection)  # multi-select for compare
+        self.reports_table.horizontalHeader().setStretchLastSection(True)
+        self.reports_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.reports_table.setAlternatingRowColors(True)
+        self.reports_table.itemSelectionChanged.connect(self.on_reports_selection_changed)
+        self.reports_table.setMinimumHeight(120)
+        reports_layout.addWidget(self.reports_table)
+
+        # Controls
+        ctrl_row = QHBoxLayout()
+        refresh_btn = QPushButton("Refresh Runs")
+        refresh_btn.clicked.connect(self.refresh_reports)
+
+        open_folder_btn = QPushButton("Open Folder")
+        open_folder_btn.clicked.connect(self.open_selected_run_folder)
+
+        compare_btn = QPushButton("Compare Selected Runs")
+        compare_btn.clicked.connect(self.compare_selected_runs)
+
+        view_html_btn = QPushButton("Open Intelligence HTML in Browser")
+        view_html_btn.clicked.connect(self.view_intelligence_html)
+
+        ctrl_row.addWidget(refresh_btn)
+        ctrl_row.addWidget(open_folder_btn)
+        ctrl_row.addWidget(compare_btn)
+        ctrl_row.addWidget(view_html_btn)
+        ctrl_row.addStretch()
+        reports_layout.addLayout(ctrl_row)
+
+        # === Artifacts list for the selected run ===
+        artifacts_label = QLabel("Artifacts in selected run (double-click to preview in box below):")
+        reports_layout.addWidget(artifacts_label)
+
+        self.artifacts_list = QListWidget()
+        self.artifacts_list.itemDoubleClicked.connect(self.on_artifact_double_clicked)
+        self.artifacts_list.setMaximumHeight(85)
+        reports_layout.addWidget(self.artifacts_list)
+
+        # Preview pane
+        self.reports_preview = QTextEdit()
+        self.reports_preview.setReadOnly(True)
+        self.reports_preview.setFont(QFont("Courier New", 9))
+        self.reports_preview.setPlaceholderText(
+            "Select run(s) above.\n"
+            "• Double-click an artifact to preview text content here.\n"
+            "• Use 'Compare Selected Runs' for side-by-side key metrics.\n"
+            "• Key artifacts: intelligence_report.*, design_model.json, reports/*.rpt, logs/*"
+        )
+        reports_layout.addWidget(self.reports_preview, stretch=1)
+
+        # Do NOT add to main_layout here. The caller (tab setup) will place it.
+        return reports_grp
+
+    def refresh_reports(self):
+        """Scan ./output/ for runs and populate the multi-column table."""
+        self.reports_table.setRowCount(0)
+
+        output_base = os.path.join(os.getcwd(), "output")
+        runs = []
+
+        if os.path.isdir(output_base):
+            for name in sorted(os.listdir(output_base), reverse=True):
+                if name.startswith("fpga_"):
+                    full_path = os.path.join(output_base, name)
+                    if os.path.isdir(full_path):
+                        # Calculate timestamp, artifact count, size
+                        try:
+                            ts = datetime.strptime(name, "fpga_%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+                        except Exception:
+                            ts = name
+
+                        file_count = 0
+                        total_size = 0
+                        for root, _, files in os.walk(full_path):
+                            for f in files:
+                                fp = os.path.join(root, f)
+                                file_count += 1
+                                try:
+                                    total_size += os.path.getsize(fp)
+                                except:
+                                    pass
+
+                        size_kb = total_size // 1024
+                        runs.append((name, full_path, ts, file_count, size_kb))
+
+        for i, (name, path, ts, count, size_kb) in enumerate(runs):
+            self.reports_table.insertRow(i)
+            self.reports_table.setItem(i, 0, QTableWidgetItem(name))
+            self.reports_table.setItem(i, 1, QTableWidgetItem(ts))
+            self.reports_table.setItem(i, 2, QTableWidgetItem(str(count)))
+            self.reports_table.setItem(i, 3, QTableWidgetItem(str(size_kb)))
+
+            # store path in item data
+            self.reports_table.item(i, 0).setData(Qt.UserRole, path)
+
+        if runs:
+            self.reports_table.selectRow(0)  # auto-select latest
+            self.on_reports_selection_changed()
+        else:
+            self.reports_table.insertRow(0)
+            item = QTableWidgetItem("(No runs found in ./output/ yet)")
+            self.reports_table.setItem(0, 0, item)
+
+    def on_reports_selection_changed(self):
+        """Update artifacts list when selection changes (supports single for preview)."""
+        self.artifacts_list.clear()
+
+        selected = self.reports_table.selectedItems()
+        if not selected:
+            return
+
+        # Use the first selected row for artifact preview
+        row = self.reports_table.currentRow()
+        if row < 0:
+            return
+
+        path = self.reports_table.item(row, 0).data(Qt.UserRole)
+        if not path or not os.path.isdir(path):
+            return
+
+        artifacts = []
+
+        # Top-level interesting files
+        for f in sorted(os.listdir(path)):
+            fp = os.path.join(path, f)
+            if os.path.isfile(fp):
+                if f in ("intelligence_report.txt", "intelligence_report.html", "design_model.json"):
+                    artifacts.append(f)
+                elif f.endswith((".log", ".txt", ".json")):
+                    artifacts.append(f)
+
+        # reports/ subfolder
+        reports_dir = os.path.join(path, "reports")
+        if os.path.isdir(reports_dir):
+            for f in sorted(os.listdir(reports_dir)):
+                if f.endswith(".rpt"):
+                    artifacts.append(f"reports/{f}")
+
+        # logs/ subfolder
+        logs_dir = os.path.join(path, "logs")
+        if os.path.isdir(logs_dir):
+            for f in sorted(os.listdir(logs_dir)):
+                if f.endswith(".log"):
+                    artifacts.append(f"logs/{f}")
+
+        for art in artifacts:
+            self.artifacts_list.addItem(art)
+
+        # Auto-load first artifact into preview if available
+        if artifacts:
+            self._load_artifact_to_preview(path, artifacts[0])
+
+    def _load_artifact_to_preview(self, run_path, artifact_name):
+        full_path = os.path.join(run_path, artifact_name)
+        try:
+            with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            self.reports_preview.setPlainText(content[:20000] + ("\n\n[... file truncated for preview ...]" if len(content) > 20000 else ""))
+        except Exception as e:
+            self.reports_preview.setPlainText(f"Error loading {artifact_name}:\n{str(e)}")
+
+    def on_artifact_double_clicked(self, item):
+        run_path = None
+        selected = self.reports_table.selectedItems()
+        if selected:
+            row = self.reports_table.currentRow()
+            run_path = self.reports_table.item(row, 0).data(Qt.UserRole)
+
+        if run_path:
+            self._load_artifact_to_preview(run_path, item.text())
+
+    def open_selected_run_folder(self):
+        selected = self.reports_table.selectedItems()
+        if selected:
+            row = self.reports_table.currentRow()
+            path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            if path and os.path.isdir(path):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def view_intelligence_html(self):
+        selected = self.reports_table.selectedItems()
+        if selected:
+            row = self.reports_table.currentRow()
+            path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            if path:
+                html_path = os.path.join(path, "intelligence_report.html")
+                if os.path.exists(html_path):
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(html_path))
+                else:
+                    QMessageBox.information(self, "Not Found", "intelligence_report.html not found for this run.")
+
+    def compare_selected_runs(self):
+        selected_rows = set()
+        for item in self.reports_table.selectedItems():
+            selected_rows.add(item.row())
+
+        if len(selected_rows) < 2:
+            QMessageBox.information(self, "Compare Runs", "Please select at least two runs (Ctrl+click) to compare.")
+            return
+
+        rows = sorted(list(selected_rows))
+        if len(rows) > 3:
+            rows = rows[:3]  # limit to 3 for readability
+
+        comparison_text = "=== Run Comparison (Key Metrics) ===\n\n"
+
+        for row in rows:
+            path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            name = self.reports_table.item(row, 0).text()
+            comparison_text += f"--- {name} ---\n"
+
+            # Try to extract useful info from intelligence_report.txt
+            txt_path = os.path.join(path, "intelligence_report.txt")
+            if os.path.exists(txt_path):
+                try:
+                    with open(txt_path, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                    # Simple extraction of key lines
+                    for line in content.splitlines():
+                        if any(kw in line.lower() for kw in ["readiness", "wns", "power", "check timing", "no clock", "size proxy"]):
+                            comparison_text += "  " + line.strip() + "\n"
+                except:
+                    pass
+            comparison_text += "\n"
+
+        self.reports_preview.setPlainText(comparison_text)
+
+    def refresh_reports(self):
+        """Scan ./output/ and populate the multi-column table."""
+        self.reports_table.setRowCount(0)
+
+        output_base = os.path.join(os.getcwd(), "output")
+        runs = []
+
+        if os.path.isdir(output_base):
+            for name in sorted(os.listdir(output_base), reverse=True):
+                if name.startswith("fpga_"):
+                    full_path = os.path.join(output_base, name)
+                    if os.path.isdir(full_path):
+                        try:
+                            ts = datetime.strptime(name, "fpga_%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+                        except:
+                            ts = name
+
+                        file_count = 0
+                        total_size = 0
+                        for root, _, files in os.walk(full_path):
+                            for f in files:
+                                fp = os.path.join(root, f)
+                                file_count += 1
+                                try:
+                                    total_size += os.path.getsize(fp)
+                                except:
+                                    pass
+                        size_kb = total_size // 1024
+                        runs.append((name, full_path, ts, file_count, size_kb))
+
+        for i, (name, path, ts, count, size_kb) in enumerate(runs):
+            self.reports_table.insertRow(i)
+            self.reports_table.setItem(i, 0, QTableWidgetItem(name))
+            self.reports_table.setItem(i, 1, QTableWidgetItem(ts))
+            self.reports_table.setItem(i, 2, QTableWidgetItem(str(count)))
+            self.reports_table.setItem(i, 3, QTableWidgetItem(str(size_kb)))
+            self.reports_table.item(i, 0).setData(Qt.UserRole, path)
+
+        if runs:
+            self.reports_table.selectRow(0)
+            self.on_reports_selection_changed()
+
+    def on_reports_selection_changed(self):
+        self.artifacts_list.clear()
+        selected = self.reports_table.selectedItems()
+        if not selected:
+            return
+
+        row = self.reports_table.currentRow()
+        path = self.reports_table.item(row, 0).data(Qt.UserRole)
+        if not path or not os.path.isdir(path):
+            return
+
+        artifacts = []
+        for f in sorted(os.listdir(path)):
+            fp = os.path.join(path, f)
+            if os.path.isfile(fp):
+                if f in ("intelligence_report.txt", "intelligence_report.html", "design_model.json"):
+                    artifacts.append(f)
+                elif f.endswith((".log", ".txt", ".json")):
+                    artifacts.append(f)
+
+        reports_dir = os.path.join(path, "reports")
+        if os.path.isdir(reports_dir):
+            for f in sorted(os.listdir(reports_dir)):
+                if f.endswith(".rpt"):
+                    artifacts.append(f"reports/{f}")
+
+        logs_dir = os.path.join(path, "logs")
+        if os.path.isdir(logs_dir):
+            for f in sorted(os.listdir(logs_dir)):
+                if f.endswith(".log"):
+                    artifacts.append(f"logs/{f}")
+
+        for art in artifacts:
+            self.artifacts_list.addItem(art)
+
+        if artifacts:
+            self._load_artifact_to_preview(path, artifacts[0])
+
+    def _load_artifact_to_preview(self, run_path, artifact_name):
+        full_path = os.path.join(run_path, artifact_name)
+        try:
+            with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            self.reports_preview.setPlainText(content[:20000] + ("\n\n[... truncated for preview ...]" if len(content) > 20000 else ""))
+        except Exception as e:
+            self.reports_preview.setPlainText(f"Error loading {artifact_name}:\n{str(e)}")
+
+    def on_artifact_double_clicked(self, item):
+        selected = self.reports_table.selectedItems()
+        if selected:
+            row = self.reports_table.currentRow()
+            run_path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            if run_path:
+                self._load_artifact_to_preview(run_path, item.text())
+
+    def open_selected_run_folder(self):
+        selected = self.reports_table.selectedItems()
+        if selected:
+            row = self.reports_table.currentRow()
+            path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            if path and os.path.isdir(path):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def view_intelligence_html(self):
+        selected = self.reports_table.selectedItems()
+        if selected:
+            row = self.reports_table.currentRow()
+            path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            if path:
+                html_path = os.path.join(path, "intelligence_report.html")
+                if os.path.exists(html_path):
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(html_path))
+                else:
+                    QMessageBox.information(self, "Not Found", "intelligence_report.html not found for this run.")
+
+    def compare_selected_runs(self):
+        selected_rows = set(item.row() for item in self.reports_table.selectedItems())
+        if len(selected_rows) < 2:
+            QMessageBox.information(self, "Compare", "Select at least two runs (Ctrl+click rows) to compare.")
+            return
+
+        rows = sorted(list(selected_rows))[:3]
+        comparison = "=== Run Comparison (Key Metrics) ===\n\n"
+
+        for row in rows:
+            name = self.reports_table.item(row, 0).text()
+            path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            comparison += f"--- {name} ---\n"
+
+            txt_path = os.path.join(path, "intelligence_report.txt")
+            if os.path.exists(txt_path):
+                try:
+                    with open(txt_path, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                    for line in content.splitlines():
+                        low = line.lower()
+                        if any(kw in low for kw in ["readiness", "wns", "power", "check timing", "no clock", "size proxy", "junction"]):
+                            comparison += "  " + line.strip() + "\n"
+                except:
+                    pass
+            comparison += "\n"
+
+        self.reports_preview.setPlainText(comparison)
+
+    def refresh_reports(self):
+        self.reports_table.setRowCount(0)
+        output_base = os.path.join(os.getcwd(), "output")
+        runs = []
+
+        if os.path.isdir(output_base):
+            for name in sorted(os.listdir(output_base), reverse=True):
+                if name.startswith("fpga_"):
+                    full_path = os.path.join(output_base, name)
+                    if os.path.isdir(full_path):
+                        try:
+                            ts = datetime.strptime(name, "fpga_%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+                        except:
+                            ts = name
+                        file_count = 0
+                        total_size = 0
+                        for root, _, files in os.walk(full_path):
+                            for f in files:
+                                fp = os.path.join(root, f)
+                                file_count += 1
+                                try:
+                                    total_size += os.path.getsize(fp)
+                                except:
+                                    pass
+                        size_kb = total_size // 1024
+                        runs.append((name, full_path, ts, file_count, size_kb))
+
+        for i, (name, path, ts, count, size_kb) in enumerate(runs):
+            self.reports_table.insertRow(i)
+            self.reports_table.setItem(i, 0, QTableWidgetItem(name))
+            self.reports_table.setItem(i, 1, QTableWidgetItem(ts))
+            self.reports_table.setItem(i, 2, QTableWidgetItem(str(count)))
+            self.reports_table.setItem(i, 3, QTableWidgetItem(str(size_kb)))
+            self.reports_table.item(i, 0).setData(Qt.UserRole, path)
+
+        if runs:
+            self.reports_table.selectRow(0)
+            self.on_reports_selection_changed()
+
+    def on_reports_selection_changed(self):
+        self.artifacts_list.clear()
+        selected = self.reports_table.selectedItems()
+        if not selected:
+            return
+        row = self.reports_table.currentRow()
+        path = self.reports_table.item(row, 0).data(Qt.UserRole)
+        if not path or not os.path.isdir(path):
+            return
+
+        artifacts = []
+        for f in sorted(os.listdir(path)):
+            fp = os.path.join(path, f)
+            if os.path.isfile(fp):
+                if f in ("intelligence_report.txt", "intelligence_report.html", "design_model.json"):
+                    artifacts.append(f)
+                elif f.endswith((".log", ".txt", ".json")):
+                    artifacts.append(f)
+
+        reports_dir = os.path.join(path, "reports")
+        if os.path.isdir(reports_dir):
+            for f in sorted(os.listdir(reports_dir)):
+                if f.endswith(".rpt"):
+                    artifacts.append(f"reports/{f}")
+
+        logs_dir = os.path.join(path, "logs")
+        if os.path.isdir(logs_dir):
+            for f in sorted(os.listdir(logs_dir)):
+                if f.endswith(".log"):
+                    artifacts.append(f"logs/{f}")
+
+        for art in artifacts:
+            self.artifacts_list.addItem(art)
+
+        if artifacts:
+            self._load_artifact_to_preview(path, artifacts[0])
+
+    def _load_artifact_to_preview(self, run_path, artifact_name):
+        full_path = os.path.join(run_path, artifact_name)
+        try:
+            with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            self.reports_preview.setPlainText(content[:20000] + ("\n\n[... truncated ...]" if len(content) > 20000 else ""))
+        except Exception as e:
+            self.reports_preview.setPlainText(f"Error loading {artifact_name}:\n{str(e)}")
+
+    def on_artifact_double_clicked(self, item):
+        selected = self.reports_table.selectedItems()
+        if selected:
+            row = self.reports_table.currentRow()
+            run_path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            if run_path:
+                self._load_artifact_to_preview(run_path, item.text())
+
+    def open_selected_run_folder(self):
+        selected = self.reports_table.selectedItems()
+        if selected:
+            row = self.reports_table.currentRow()
+            path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            if path and os.path.isdir(path):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def view_intelligence_html(self):
+        selected = self.reports_table.selectedItems()
+        if selected:
+            row = self.reports_table.currentRow()
+            path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            if path:
+                html_path = os.path.join(path, "intelligence_report.html")
+                if os.path.exists(html_path):
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(html_path))
+                else:
+                    QMessageBox.information(self, "Not Found", "intelligence_report.html not found for this run.")
+
+    def compare_selected_runs(self):
+        selected_rows = set(item.row() for item in self.reports_table.selectedItems())
+        if len(selected_rows) < 2:
+            QMessageBox.information(self, "Compare", "Select at least two runs (Ctrl+click) to compare.")
+            return
+
+        rows = sorted(list(selected_rows))[:3]
+        comparison = "=== Run Comparison (Key Metrics) ===\n\n"
+
+        for row in rows:
+            name = self.reports_table.item(row, 0).text()
+            path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            comparison += f"--- {name} ---\n"
+
+            txt_path = os.path.join(path, "intelligence_report.txt")
+            if os.path.exists(txt_path):
+                try:
+                    with open(txt_path, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                    for line in content.splitlines():
+                        low = line.lower()
+                        if any(kw in low for kw in ["readiness", "wns", "power", "check timing", "no clock", "size proxy", "junction"]):
+                            comparison += "  " + line.strip() + "\n"
+                except:
+                    pass
+            comparison += "\n"
+
+        self.reports_preview.setPlainText(comparison)
+
+    def refresh_reports(self):
+        self.reports_table.setRowCount(0)
+        output_base = os.path.join(os.getcwd(), "output")
+        runs = []
+
+        if os.path.isdir(output_base):
+            for name in sorted(os.listdir(output_base), reverse=True):
+                if name.startswith("fpga_"):
+                    full_path = os.path.join(output_base, name)
+                    if os.path.isdir(full_path):
+                        try:
+                            ts = datetime.strptime(name, "fpga_%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+                        except:
+                            ts = name
+                        file_count = 0
+                        total_size = 0
+                        for root, _, files in os.walk(full_path):
+                            for f in files:
+                                fp = os.path.join(root, f)
+                                file_count += 1
+                                try:
+                                    total_size += os.path.getsize(fp)
+                                except:
+                                    pass
+                        size_kb = total_size // 1024
+                        runs.append((name, full_path, ts, file_count, size_kb))
+
+        for i, (name, path, ts, count, size_kb) in enumerate(runs):
+            self.reports_table.insertRow(i)
+            self.reports_table.setItem(i, 0, QTableWidgetItem(name))
+            self.reports_table.setItem(i, 1, QTableWidgetItem(ts))
+            self.reports_table.setItem(i, 2, QTableWidgetItem(str(count)))
+            self.reports_table.setItem(i, 3, QTableWidgetItem(str(size_kb)))
+            self.reports_table.item(i, 0).setData(Qt.UserRole, path)
+
+        if runs:
+            self.reports_table.selectRow(0)
+            self.on_reports_selection_changed()
+
+    def on_reports_selection_changed(self):
+        self.artifacts_list.clear()
+        selected = self.reports_table.selectedItems()
+        if not selected:
+            return
+        row = self.reports_table.currentRow()
+        path = self.reports_table.item(row, 0).data(Qt.UserRole)
+        if not path or not os.path.isdir(path):
+            return
+
+        artifacts = []
+        for f in sorted(os.listdir(path)):
+            fp = os.path.join(path, f)
+            if os.path.isfile(fp):
+                if f in ("intelligence_report.txt", "intelligence_report.html", "design_model.json"):
+                    artifacts.append(f)
+                elif f.endswith((".log", ".txt", ".json")):
+                    artifacts.append(f)
+
+        reports_dir = os.path.join(path, "reports")
+        if os.path.isdir(reports_dir):
+            for f in sorted(os.listdir(reports_dir)):
+                if f.endswith(".rpt"):
+                    artifacts.append(f"reports/{f}")
+
+        logs_dir = os.path.join(path, "logs")
+        if os.path.isdir(logs_dir):
+            for f in sorted(os.listdir(logs_dir)):
+                if f.endswith(".log"):
+                    artifacts.append(f"logs/{f}")
+
+        for art in artifacts:
+            self.artifacts_list.addItem(art)
+
+        if artifacts:
+            self._load_artifact_to_preview(path, artifacts[0])
+
+    def _load_artifact_to_preview(self, run_path, artifact_name):
+        full_path = os.path.join(run_path, artifact_name)
+        try:
+            with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            self.reports_preview.setPlainText(content[:20000] + ("\n\n[... truncated ...]" if len(content) > 20000 else ""))
+        except Exception as e:
+            self.reports_preview.setPlainText(f"Error loading {artifact_name}:\n{str(e)}")
+
+    def on_artifact_double_clicked(self, item):
+        selected = self.reports_table.selectedItems()
+        if selected:
+            row = self.reports_table.currentRow()
+            run_path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            if run_path:
+                self._load_artifact_to_preview(run_path, item.text())
+
+    def open_selected_run_folder(self):
+        selected = self.reports_table.selectedItems()
+        if selected:
+            row = self.reports_table.currentRow()
+            path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            if path and os.path.isdir(path):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
+    def view_intelligence_html(self):
+        selected = self.reports_table.selectedItems()
+        if selected:
+            row = self.reports_table.currentRow()
+            path = self.reports_table.item(row, 0).data(Qt.UserRole)
+            if path:
+                html_path = os.path.join(path, "intelligence_report.html")
+                if os.path.exists(html_path):
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(html_path))
+                else:
+                    QMessageBox.information(self, "Not Found", "intelligence_report.html not found for this run.")
 
     def append_log(self, text):
         html = text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
@@ -572,15 +1244,32 @@ class FPGAGUI(QMainWindow):
             if reply == QMessageBox.No:
                 return
 
+        inputs = self.build_gui_inputs()
+        flow_idx = self.flow_combo.currentIndex()
+        flow_key = ["sim", "cmod", "regression", "full"][flow_idx]
+
+        # Verify C-model tools if this flow uses C-model
+        uses_cmodel = flow_idx in (1, 2, 3) and bool(inputs.get("cmodel_dir"))
+        if uses_cmodel:
+            from fpga_tool.flow_utils import verify_environment
+            if not verify_environment(require_vivado=False, require_cmodel_tools=True):
+                QMessageBox.warning(self, "Missing C-model Tools",
+                    "gcc and/or make were not found.\nC-model flows require a working C compiler and make.\n\nPlease install them and restart the tool.")
+                return
+
         self.run_btn.setEnabled(False)
         self.log_text.clear()
         
-        inputs = self.build_gui_inputs()
-        flow_idx = self.flow_combo.currentIndex()
+        # Inform the user that the run has started and where to see progress
+        flow_name = self.flow_combo.currentText()
+        print(f"\n🚀 Run started: {flow_name}")
+        print("   → You can monitor the full live output in the 'Live Console' tab.")
+        print("   → When finished, detailed reports will appear in the 'Results Sessions' tab.\n")
         
-        flow_key = ["sim", "cmod", "regression", "full"][flow_idx]
+        # Automatically switch to the Live Console tab so the user sees the output immediately
+        self.tab_widget.setCurrentIndex(1)   # 0=Configuration, 1=Live Console, 2=Results Sessions
         
-        # Save context so CLI rerun works
+        # Save context so "Load Last Run Config" works
         context = {
             "vendor": "xilinx",
             "flow": flow_key,
@@ -622,12 +1311,26 @@ class FPGAGUI(QMainWindow):
         # Re-enable button safely through the main thread
         self.emitter.finished_signal.emit()
 
+        # Auto-select latest run and optionally open the HTML report on success
+        if rc == 0:
+            # Auto-open the rich HTML report in browser after successful run (very convenient)
+            QTimer.singleShot(300, self._auto_open_latest_html)
+
     def closeEvent(self, event):
         sys.stdout = self.original_stdout
         super().closeEvent(event)
 
-if __name__ == '__main__':
+def main():
+    """Entry point for 'run-fpga-gui' console script and 'python -m run_fpga_gui'."""
+    # Early dependency verification (prints to console)
+    print("\n[Startup] Verifying external dependencies...")
+    verify_environment(require_vivado=True, require_cmodel_tools=False)
+
     app = QApplication(sys.argv)
     gui = FPGAGUI()
     gui.show()
     sys.exit(app.exec_())
+
+
+if __name__ == '__main__':
+    main()

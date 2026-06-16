@@ -3,7 +3,7 @@
 #                                                                              #
 #                      L O G I C L A N C E   S Y S T E M                       #
 #                                                                              #
-#  Module: FPGA Automation Tool — Entry Point                                  #
+#  Module: FPGA Automation Tool — GUI Launcher (CLI removed)                   #
 #  Author: Hemanth Kumar DM                                                    #
 #  Role  : Physical Design Engineer, ASIC Automation Engineer                  #
 #                                                                              #
@@ -12,220 +12,23 @@
 ################################################################################
 
 """
-FPGA Automation Tool — Interactive CLI Entry Point.
+FPGA Automation Tool — GUI Only
+
+The command-line interface has been removed.
+All configuration and execution is now done through the graphical interface.
 
 Usage:
-    python3 run_fpga                         # Interactive menu
-    python3 run_fpga --rerun                 # Repeat last run
-    python3 run_fpga --flow sim              # Direct flow selection
-    python3 run_fpga --generate-config       # Write config template
-    python3 run_fpga --verbose               # Enable debug output
+    python3 run_fpga                  # Launches the GUI
+    python3 run_fpga_gui.py           # Same as above
 """
 
 import os
 import sys
-import shutil
-from datetime import datetime
-
-# Ensure package is importable
-_script_dir = os.path.dirname(os.path.abspath(__file__))
-if _script_dir not in sys.path:
-    sys.path.insert(0, _script_dir)
-
-from fpga_tool.flow_utils import (
-    SimLogger, SmartInput, CommandManager,
-    find_vivado, enable_tab_completion,
-    BOLD, CYAN, GREEN, WARN, FAIL, RESET, BLUE, DIM,
-)
-from fpga_tool.run_fpga_xilinx import (
-    run_xilinx_sim,
-    run_xilinx_cmod_sim,
-    run_xilinx_regression,
-    run_xilinx_full_flow,
-)
-
-
-# ──────────────────── Banner ────────────────────
-
-BANNER = f"""
-{CYAN}{BOLD}╔════════════════════════════════════════════════════╗
-║         FPGA Automation Tool v1.0                  ║
-║         (LogicLance Compatible)                    ║
-╠════════════════════════════════════════════════════╣
-║  1 │ Post-Implementation Simulation               ║
-║  2 │ C-Model + Simulation                         ║
-║  3 │ Multi-Test Regression                        ║
-║  4 │ Full Flow (Synth → Impl → Test → XSA)        ║
-║  5 │ Generate Config Template                      ║
-║  0 │ Exit                                          ║
-╚════════════════════════════════════════════════════╝{RESET}
-"""
-
-FLOW_NAMES = {
-    "1": "Post-Implementation Simulation",
-    "2": "C-Model + Simulation",
-    "3": "Multi-Test Regression",
-    "4": "Full Flow (Synth → Impl → Test → XSA)",
-    "sim": "Post-Implementation Simulation",
-    "cmod": "C-Model + Simulation",
-    "regression": "Multi-Test Regression",
-    "full": "Full Flow (Synth → Impl → Test → XSA)",
-}
-
-
-def generate_config_template(logger):
-    """Copy the config template to current directory."""
-    src = os.path.join(_script_dir, "configs", "config_template.tcl")
-    dst = os.path.join(os.getcwd(), "fpga_config.tcl")
-
-    if not os.path.exists(src):
-        logger.error(f"Template not found: {src}")
-        return
-
-    if os.path.exists(dst):
-        overwrite = input(f"{WARN}fpga_config.tcl already exists. Overwrite? [y/N]: {RESET}").strip()
-        if overwrite.lower() not in ("y", "yes"):
-            logger.info("Cancelled.")
-            return
-
-    shutil.copy2(src, dst)
-    logger.success(f"Config template written to: {dst}")
-    logger.info("Edit this file with your project settings, then run:")
-    print(f"  {BOLD}python3 run_fpga{RESET}")
-
-
-def check_vivado(logger):
-    """Check if Vivado is available and print version info."""
-    vivado = find_vivado()
-    if vivado:
-        logger.info(f"Vivado found: {vivado}")
-        return True
-    else:
-        logger.warn("Vivado not found in PATH or $XILINX_VIVADO.")
-        logger.warn("Simulation/build flows will fail without Vivado.")
-        logger.warn("Set XILINX_VIVADO or add vivado to your PATH.")
-        return False
-
-
-def main():
-    # Parse global flags
-    verbose = "--verbose" in sys.argv
-    logger = SimLogger(verbose=verbose)
-
-    enable_tab_completion()
-
-    cmd_mgr = CommandManager(_script_dir, logger)
-
-    # ── Handle --generate-config ──
-    if "--generate-config" in sys.argv:
-        generate_config_template(logger)
-        sys.exit(0)
-
-    # ── Handle --rerun ──
-    if "--rerun" in sys.argv:
-        last_run = cmd_mgr.load_last_command()
-        if not last_run:
-            logger.halt("No previous run found. Run a flow first.")
-
-        flow_key = last_run.get("command", "1")
-        flow_name = FLOW_NAMES.get(flow_key, flow_key)
-        logger.info(f"Restoring last run: {flow_name}")
-
-        smart_in = SmartInput(logger, flow_type='rerun', rerun_data=last_run)
-        run_id = f"fpga_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-        check_vivado(logger)
-
-        if flow_key in ("1", "sim"):
-            rc = run_xilinx_sim(logger, smart_in, run_id)
-        elif flow_key in ("2", "cmod"):
-            rc = run_xilinx_cmod_sim(logger, smart_in, run_id)
-        elif flow_key in ("3", "regression"):
-            rc = run_xilinx_regression(logger, smart_in, run_id)
-        elif flow_key in ("4", "full"):
-            rc = run_xilinx_full_flow(logger, smart_in, run_id)
-        else:
-            logger.halt(f"Unknown flow in saved state: {flow_key}")
-
-        sys.exit(rc)
-
-    # ── Handle --flow <name> ──
-    flow_arg = None
-    if "--flow" in sys.argv:
-        idx = sys.argv.index("--flow")
-        if idx + 1 < len(sys.argv):
-            flow_arg = sys.argv[idx + 1]
-        else:
-            logger.halt("Usage: --flow <sim|cmod|regression|full>")
-
-    # ── Interactive Menu ──
-    if flow_arg is None:
-        print(BANNER)
-        try:
-            choice = input(f"  {BOLD}Enter choice [0-5]:{RESET} ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            sys.exit(0)
-
-        if choice == "0" or choice == "":
-            sys.exit(0)
-        elif choice == "5":
-            generate_config_template(logger)
-            sys.exit(0)
-        elif choice in ("1", "2", "3", "4"):
-            flow_arg = {"1": "sim", "2": "cmod", "3": "regression", "4": "full"}[choice]
-        else:
-            logger.error(f"Invalid choice: {choice}")
-            sys.exit(1)
-
-    # ── Vendor Selection ──
-    print(f"\n{CYAN}──── FPGA Vendor ────{RESET}")
-    print(f"  [1] Xilinx/AMD (Vivado)")
-    print(f"  {DIM}[2] Intel (Quartus) — coming soon{RESET}")
-    print(f"  {DIM}[3] Lattice (Diamond) — coming soon{RESET}")
-
-    try:
-        vendor = input(f"\n  {BOLD}Enter choice [1]:{RESET} ").strip() or "1"
-    except (EOFError, KeyboardInterrupt):
-        print()
-        sys.exit(0)
-
-    if vendor != "1":
-        logger.halt("Only Xilinx/AMD (Vivado) is currently supported.")
-
-    # ── Check Vivado ──
-    check_vivado(logger)
-
-    # ── Run Selected Flow ──
-    flow_name = FLOW_NAMES.get(flow_arg, flow_arg)
-    logger.info(f"Selected flow: {flow_name}")
-
-    smart_in = SmartInput(logger, flow_type='default')
-    run_id = f"fpga_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-
-    rc = 1
-    if flow_arg == "sim":
-        rc = run_xilinx_sim(logger, smart_in, run_id)
-    elif flow_arg == "cmod":
-        rc = run_xilinx_cmod_sim(logger, smart_in, run_id)
-    elif flow_arg == "regression":
-        rc = run_xilinx_regression(logger, smart_in, run_id)
-    elif flow_arg == "full":
-        rc = run_xilinx_full_flow(logger, smart_in, run_id)
-    else:
-        logger.halt(f"Unknown flow: {flow_arg}")
-
-    # ── Save context for --rerun ──
-    context = {
-        "vendor": "xilinx",
-        "flow": flow_arg,
-        "inputs": smart_in.get_inputs(),
-        "run_id": run_id,
-    }
-    cmd_mgr.save_last_command(flow_arg, context)
-
-    sys.exit(rc)
-
 
 if __name__ == "__main__":
-    main()
+    # Launch the GUI (CLI features removed)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    gui_script = os.path.join(script_dir, "run_fpga_gui.py")
+    
+    print("Launching FPGA Automation Tool GUI (with dependency verification)...")
+    os.execv(sys.executable, [sys.executable, gui_script] + sys.argv[1:])

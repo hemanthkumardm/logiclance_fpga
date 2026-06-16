@@ -32,6 +32,26 @@ from fpga_tool.flow_utils import SimLogger, SmartInput, ArtifactManager, find_vi
 from fpga_tool.tcl_gen import generate_vivado_config_tcl
 from fpga_tool.fpga_parser import parse_result_file, format_test_summary, VivadoRealtimeParser
 
+# Intelligence layer (Phase 1 + Phase 2) — best effort, never affects core flow
+try:
+    from fpga_tool.intelligence import (
+        build_design_model_safely,
+        collect_run_metrics_safely,
+        build_intelligence_report,
+        generate_html_report,
+        generate_recommendations,
+        HistoryDB,
+        FlowPlanner,
+        create_planner_for_config,
+        Optimizer,
+        timing_failure_checker,
+        KnowledgeBase,
+        get_knowledge_base,
+    )
+    _INTEL_AVAILABLE = True
+except Exception:
+    _INTEL_AVAILABLE = False
+
 
 # ──────────────────── Helpers ────────────────────
 
@@ -405,6 +425,112 @@ def _build_run_config(config, run_id, logger):
     return config_tcl_path, output_dir
 
 
+# ──────────────────── Phase 1 Intelligence Integration (best-effort) ────────────────────
+
+def _emit_intelligence_after_run(config, run_id, output_dir, logger, flow_name, exit_code, log_lines=None):
+    """
+    Phase 1 + Phase 2: Build model, collect metrics, run planner for incremental decisions,
+    generate rich text + HTML reports, persist artifacts, and record to history.
+    """
+    if not _INTEL_AVAILABLE:
+        return
+
+    try:
+        model = build_design_model_safely(config, logger=logger)
+        metrics = collect_run_metrics_safely(output_dir, logger=logger)
+
+        input_sig = _compute_simple_input_sig(config)
+        if input_sig:
+            metrics = dict(metrics)
+            metrics["_input_sig"] = input_sig
+
+        history = HistoryDB(logger=logger)
+        recalls = history.recall_advice(model, metrics, flow=flow_name)
+
+        # Phase 2/3: Planner + Optimizer + Knowledge
+        planner = None
+        planner_dec = None
+        knowledge = None
+        opt = None
+        try:
+            planner = create_planner_for_config(config, logger=logger)
+            planner_dec = planner.analyze(config, flow_name)
+            if planner_dec and planner_dec.get("can_skip_synth_impl"):
+                recalls = [planner_dec["reason"]] + recalls
+
+            knowledge = get_knowledge_base(logger=logger)
+            opt = Optimizer(history_db=history, design_model=model, logger=logger)
+            best_strat = opt.best_strategy_for_signature(getattr(model, "signature", ""), getattr(model, "part", ""))
+            metrics = dict(metrics)
+            metrics["_recommended_strategy"] = best_strat["name"]
+        except Exception:
+            pass
+
+        # Text report (enhanced with Phase 3 knowledge)
+        enriched_recs = generate_recommendations(model, metrics, recalls, planner_decision=planner_dec, knowledge=knowledge)
+        report_text = build_intelligence_report(model, metrics, recalls, planner_decision=planner_dec)
+        # append enriched recs if not already dominant
+        if enriched_recs:
+            report_text += "\n\n[Phase 3 Knowledge + Optimizer]\n" + "\n".join("  → " + r for r in enriched_recs[:4])
+
+        print("\n" + report_text)
+
+        # Persist artifacts (Phase 2 also writes rich HTML)
+        try:
+            if model is not None:
+                import json
+                with open(os.path.join(output_dir, "design_model.json"), "w") as f:
+                    json.dump(model.to_dict() if hasattr(model, "to_dict") else {}, f, indent=2, default=str)
+
+            with open(os.path.join(output_dir, "intelligence_report.txt"), "w") as f:
+                f.write(report_text)
+
+            # Phase 2 rich HTML report
+            trend = history.get_closure_trend(getattr(model, "signature", "")) if model else {}
+            html = generate_html_report(model, metrics, recalls,
+                                        generate_recommendations(model, metrics, recalls, planner_dec),
+                                        planner_decision=planner_dec,
+                                        trend_data=[trend] if trend else None)
+            with open(os.path.join(output_dir, "intelligence_report.html"), "w") as f:
+                f.write(html)
+        except Exception as e:
+            logger.debug(f"Could not write intelligence artifacts: {e}")
+
+        # Record (includes planner decision in metrics for future recall)
+        try:
+            if planner_dec:
+                metrics["_planner"] = planner_dec
+            status = "success" if exit_code == 0 else "failed"
+            history.record_run(
+                run_id=run_id,
+                flow=flow_name,
+                design_model=model,
+                metrics=metrics,
+                status=status,
+                exit_code=exit_code,
+                output_dir=os.path.abspath(output_dir),
+            )
+        except Exception as e:
+            logger.debug(f"History record skipped: {e}")
+
+        history.close()
+
+    except Exception as e:
+        logger.warn(f"Intelligence post-processing skipped (non-fatal): {e}")
+
+
+def _compute_simple_input_sig(config):
+    """Very lightweight signature of the inputs that matter for incremental decisions."""
+    import hashlib
+    h = hashlib.sha256()
+    for key in ("project_xpr", "source_files", "tb_dir", "tb_files", "cmodel_dir"):
+        val = config.get(key) or ""
+        if isinstance(val, (list, tuple)):
+            val = " ".join(str(v) for v in val)
+        h.update(str(val).encode())
+    return h.hexdigest()[:12]
+
+
 # ──────────────────── Flow 1: Single Simulation ────────────────────
 
 def run_xilinx_sim(logger, smart_in, run_id):
@@ -433,6 +559,12 @@ def run_xilinx_sim(logger, smart_in, run_id):
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, 'w') as f:
         f.writelines(log_lines)
+
+    # Phase 1: Design Intelligence + History recall + report
+    _emit_intelligence_after_run(
+        config, run_id, output_dir, logger,
+        flow_name="sim", exit_code=exit_code, log_lines=log_lines
+    )
 
     return exit_code
 
@@ -465,6 +597,12 @@ def run_xilinx_cmod_sim(logger, smart_in, run_id):
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, 'w') as f:
         f.writelines(log_lines)
+
+    # Phase 1: Design Intelligence + History recall + report
+    _emit_intelligence_after_run(
+        config, run_id, output_dir, logger,
+        flow_name="cmod", exit_code=exit_code, log_lines=log_lines
+    )
 
     return exit_code
 
@@ -518,10 +656,31 @@ def run_xilinx_regression(logger, smart_in, run_id):
 
     # Return 1 if any test failed
     if any(r["result"] == "FAIL" for r in results):
-        return 1
-    if any(r["result"] == "UNKNOWN" for r in results):
-        return 2
-    return exit_code
+        final_rc = 1
+    elif any(r["result"] == "UNKNOWN" for r in results):
+        final_rc = 2
+    else:
+        final_rc = exit_code
+
+    # Phase 2: optionally surface stimulus suggestions in the intelligence layer
+    # (actual file materialization left to user or future automation)
+    try:
+        if _INTEL_AVAILABLE and len(config.get("test_cases", [])) < 4:
+            from fpga_tool.intelligence import generate_additional_test_cases, build_design_model_safely
+            model = build_design_model_safely(config, logger=logger)
+            extras = generate_additional_test_cases(model, config.get("test_cases", []), num_extra=2)
+            if extras:
+                logger.info(f"[INTEL] Stimulus generator suggests {len(extras)} additional vectors (see intelligence report).")
+    except Exception:
+        pass
+
+    # Phase 1 + 2 intelligence
+    _emit_intelligence_after_run(
+        config, run_id, output_dir, logger,
+        flow_name="regression", exit_code=final_rc, log_lines=log_lines
+    )
+
+    return final_rc
 
 
 # ──────────────────── Flow 4: Full Flow ────────────────────
@@ -572,6 +731,49 @@ def run_xilinx_full_flow(logger, smart_in, run_id):
         config["test_cases"] = []
 
     _print_config_summary(config, "Full Flow (Synth → Impl → Test → XSA)")
+
+    # Phase 2: Strong planner-driven pre-run advice + incremental decision
+    planner_decision = None
+    if _INTEL_AVAILABLE:
+        try:
+            early_planner = create_planner_for_config(config, logger=logger)
+            planner_decision = early_planner.analyze(config, "full")
+            
+            # Phase 3: Smart auto XDC creation if no constraints detected (for both create and open existing)
+            # Do this early so we can force full impl and override any skip advice
+            model = build_design_model_safely(config, logger=logger)
+            if model:
+                # Check if any XDC seems present in sources or project dir
+                source_list = config.get("source_files", []) or []
+                if isinstance(source_list, str): source_list = [source_list]
+                proj_dir = config.get("project_dir", "") or ""
+                has_xdc = any(str(f).lower().endswith('.xdc') for f in source_list) or \
+                          (proj_dir and os.path.isdir(proj_dir) and any(f.lower().endswith('.xdc') for f in os.listdir(proj_dir) if os.path.isfile(os.path.join(proj_dir, f))))
+                
+                if not has_xdc or model.has_unconstrained_clocks():
+                    try:
+                        xdc = model.generate_basic_xdc()
+                        xdc_path = os.path.join(proj_dir or ".", "auto_generated.xdc")
+                        os.makedirs(os.path.dirname(xdc_path), exist_ok=True)
+                        with open(xdc_path, "w") as xf:
+                            xf.write(xdc)
+                        config["auto_xdc_file"] = os.path.abspath(xdc_path)
+                        config["force_full_impl"] = True
+                        logger.info(f"[INTEL] No XDC detected — auto-created: {xdc_path}")
+                        logger.info("[INTEL] The generated XDC will be added to the project constraints (create_clock + basic I/O delays). Tune the period and delays for your target frequency!")
+                        logger.info("[INTEL] Forcing full synthesis + implementation this time to produce fresh reports with the new XDC applied (ignoring any incremental skip suggestion).")
+                        if planner_decision:
+                            planner_decision["can_skip_synth_impl"] = False
+                            planner_decision["reason"] = "Forcing full implementation because we just auto-generated the missing XDC."
+                    except Exception as e:
+                        logger.debug(f"Auto XDC generation skipped: {e}")
+            
+            pre_advice = early_planner.get_pre_run_advice(config, "full")
+            if pre_advice:
+                print("\n" + "\n".join(f"[INTEL] {a}" for a in pre_advice))
+        except Exception:
+            pass
+
     if not smart_in.get_bool("Proceed?", "_confirm", default=True):
         logger.info("Cancelled by user.")
         return 130
@@ -602,5 +804,45 @@ def run_xilinx_full_flow(logger, smart_in, run_id):
     runs_dir = os.path.join(project_dir, f"{project_name}.runs")
     artifacts.archive_glob(os.path.join(runs_dir, "synth_1", "*.rpt"), "reports")
     artifacts.archive_glob(os.path.join(runs_dir, "impl_1", "*.rpt"), "reports")
+
+    # Phase 1: Design Intelligence + History recall + report (after all archiving)
+    _emit_intelligence_after_run(
+        config, run_id, output_dir, logger,
+        flow_name="full", exit_code=exit_code, log_lines=log_lines
+    )
+
+    # Phase 3: Optimizer loop - limited autonomous retry with history-guided strategy if --optimize or config flag
+    if (exit_code != 0 or (metrics := collect_run_metrics_safely(output_dir, logger=logger)) and timing_failure_checker(metrics, exit_code)) and _INTEL_AVAILABLE and ("--optimize" in sys.argv or config.get("optimize", False)):
+        try:
+            model = build_design_model_safely(config, logger=logger)
+            hist = HistoryDB(logger=logger)
+            opt = Optimizer(history_db=hist, design_model=model, logger=logger, max_attempts=2)
+            best = opt.best_strategy_for_signature(getattr(model, "signature", "") if model else "", getattr(model, "part", "") or config.get("fpga_part", ""))
+            logger.info(f"[OPTIMIZER] First run failed or timing poor. Retrying once with recommended strategy: {best['name']}")
+            # Adjust config for retry
+            config["synth_strategy"] = best.get("synth", "")
+            config["impl_strategy"] = best.get("impl", "")
+            config["synth_jobs"] = best.get("synth_jobs", config.get("synth_jobs", 4))
+            config["impl_jobs"] = best.get("impl_jobs", config.get("impl_jobs", 8))
+            config["optimize"] = False  # prevent infinite
+            # Rebuild config and re-run (project now exists, full_flow.tcl will open)
+            config_tcl, output_dir2 = _build_run_config(config, run_id + "_opt", logger)
+            exit_code2, log_lines2 = _run_vivado_batch(
+                _tcl_path("full_flow.tcl"), config_tcl, logger, timeout=None
+            )
+            # append logs
+            with open(log_path, 'a') as f:
+                f.write("\n\n=== OPTIMIZER RETRY ===\n")
+                f.writelines(log_lines2)
+            # re-emit for the opt run
+            _emit_intelligence_after_run(config, run_id + "_opt", output_dir2 or output_dir, logger, "full_opt", exit_code2, log_lines2)
+            if exit_code2 == 0:
+                logger.success("[OPTIMIZER] Retry succeeded with " + best["name"])
+                exit_code = 0
+            else:
+                logger.warn("[OPTIMIZER] Retry still failed.")
+            hist.close()
+        except Exception as e:
+            logger.warn(f"[OPTIMIZER] Retry logic skipped: {e}")
 
     return exit_code

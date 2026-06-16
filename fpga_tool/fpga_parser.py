@@ -92,13 +92,17 @@ def parse_timing_summary(report_path):
         with open(report_path, 'r') as f:
             content = f.read()
 
-        # WNS (Worst Negative Slack)
+        # WNS (Worst Negative Slack) — multiple possible formats in Vivado reports
         m = re.search(r'WNS\(ns\)\s*:\s*([-\d.]+)', content)
+        if not m:
+            m = re.search(r'WNS\s*[:=]\s*([-\d.]+)\s*ns', content, re.IGNORECASE)
         if m:
             result["wns"] = float(m.group(1))
 
         # TNS (Total Negative Slack)
         m = re.search(r'TNS\(ns\)\s*:\s*([-\d.]+)', content)
+        if not m:
+            m = re.search(r'TNS\s*[:=]\s*([-\d.]+)\s*ns', content, re.IGNORECASE)
         if m:
             result["tns"] = float(m.group(1))
 
@@ -281,3 +285,183 @@ class VivadoRealtimeParser:
             self.console.print(f"[bold cyan]{e_clean}[/bold cyan]")
         else:
             self.console.print(f"[dim white]{e_clean}[/dim white]")
+
+
+# =============================================================================
+# Phase 1 Enhanced Report Parsers (additive — all existing APIs unchanged)
+# =============================================================================
+
+def parse_clock_utilization_report(report_path):
+    """
+    Parse clock utilization report.
+    Returns dict with clock count, BUFG usage, global clocks, etc. or None.
+    """
+    if not report_path or not os.path.exists(report_path):
+        return None
+    result = {"global_clocks": [], "bufg_used": 0, "bufg_available": 0, "clock_loads": 0}
+    try:
+        with open(report_path, 'r') as f:
+            content = f.read()
+        # BUFGCTRL line
+        m = re.search(r'BUFGCTRL\s*\|\s*(\d+)\s*\|\s*(\d+)', content)
+        if m:
+            result["bufg_used"] = int(m.group(1))
+            result["bufg_available"] = int(m.group(2))
+        # Global clock details (rough)
+        for line in content.splitlines():
+            if "BUFG" in line and "O " in line and "|" in line:
+                # crude extraction of net / period if present
+                parts = [p.strip() for p in line.split("|") if p.strip()]
+                if len(parts) > 5:
+                    result["global_clocks"].append({"net": parts[-1][:40]})
+        # Loads
+        m = re.search(r'Clock Loads.*?(\d+)', content, re.DOTALL)
+        if m:
+            result["clock_loads"] = int(m.group(1))
+    except Exception:
+        return None
+    return result
+
+
+def parse_power_report(report_path):
+    """
+    Parse power report for total/dynamic/static + junction warnings.
+    """
+    if not report_path or not os.path.exists(report_path):
+        return None
+    result = {"total_w": None, "dynamic_w": None, "static_w": None, "junction_c": None, "warnings": []}
+    try:
+        with open(report_path, 'r') as f:
+            content = f.read()
+        m = re.search(r'Total On-Chip Power \(W\)\s*\|\s*([\d.]+)', content)
+        if m:
+            result["total_w"] = float(m.group(1))
+        m = re.search(r'Dynamic \(W\)\s*\|\s*([\d.]+)', content)
+        if m:
+            result["dynamic_w"] = float(m.group(1))
+        m = re.search(r'Device Static \(W\)\s*\|\s*([\d.]+)', content)
+        if m:
+            result["static_w"] = float(m.group(1))
+        m = re.search(r'Junction Temperature \(C\)\s*\|\s*([\d.]+)', content)
+        if m:
+            result["junction_c"] = float(m.group(1))
+        if "Junction temp exceeded" in content or "exceeded" in content.lower():
+            result["warnings"].append("Junction temperature exceeded or marginal")
+    except Exception:
+        return None
+    return result
+
+
+def parse_methodology_and_check_timing(report_path):
+    """
+    Parse common issues from timing summary / methodology / check_timing sections
+    (no_clock, unconstrained endpoints, etc.).
+    Works on the main timing_summary_routed.rpt which contains these tables.
+    """
+    if not report_path or not os.path.exists(report_path):
+        return None
+    result = {"methodology_violations": 0, "no_clock": 0, "unconstrained_endpoints": 0, "other_issues": []}
+    try:
+        with open(report_path, 'r') as f:
+            content = f.read()
+        # Methodology table
+        m = re.search(r'Rule\s+Severity.*?Violations\s*\n(.*?)(?:\n\n|\Z)', content, re.DOTALL)
+        if m:
+            # Count numeric violations
+            nums = re.findall(r'\|\s*(\d+)\s*$', m.group(1), re.MULTILINE)
+            result["methodology_violations"] = sum(int(x) for x in nums) if nums else 0
+        # check_timing no_clock etc.
+        m = re.search(r'checking no_clock \((\d+)\)', content)
+        if m:
+            result["no_clock"] = int(m.group(1))
+        m = re.search(r'unconstrained_internal_endpoints \((\d+)\)', content)
+        if m:
+            result["unconstrained_endpoints"] = int(m.group(1))
+        if result["no_clock"] > 0:
+            result["other_issues"].append(f"{result['no_clock']} registers with no clock (no_clock check)")
+    except Exception:
+        return None
+    return result
+
+
+def parse_detailed_timing_paths(report_path, max_paths=3):
+    """
+    Light extraction of top violating path endpoints when the report contains them.
+    """
+    if not report_path or not os.path.exists(report_path):
+        return []
+    paths = []
+    try:
+        with open(report_path, 'r') as f:
+            content = f.read()
+        # Look for simple "Path 1" or endpoint lines in detailed reports
+        for m in re.finditer(r'(?:Path\s+\d+|From:\s*|To:\s*)([^\n]{10,80})', content):
+            p = m.group(1).strip()
+            if p and len(paths) < max_paths:
+                paths.append(p[:70])
+    except Exception:
+        return []
+    return paths
+
+
+def collect_run_metrics(output_dir):
+    """
+    High-level collector used by the intelligence layer.
+
+    Looks for the reports/ subdirectory created by ArtifactManager (or the Vivado
+    project runs dir as fallback). Returns a flat dict of useful metrics.
+    Safe to call on any output dir; returns {} on problems.
+    """
+    if not output_dir:
+        return {}
+    reports_dir = os.path.join(output_dir, "reports")
+    if not os.path.isdir(reports_dir):
+        # try common Vivado location relative to a project dir guess
+        reports_dir = output_dir
+
+    metrics = {
+        "timing": None,
+        "utilization": None,
+        "clock": None,
+        "power": None,
+        "methodology": None,
+        "top_violating_paths": [],
+    }
+
+    # Find likely report files (the tool already archives many)
+    candidates = {}
+    for fn in os.listdir(reports_dir) if os.path.isdir(reports_dir) else []:
+        low = fn.lower()
+        if "timing" in low and "summary" in low:
+            candidates["timing"] = os.path.join(reports_dir, fn)
+        elif "utilization" in low:
+            candidates["util"] = os.path.join(reports_dir, fn)
+        elif "clock" in low:
+            candidates["clock"] = os.path.join(reports_dir, fn)
+        elif "power" in low:
+            candidates["power"] = os.path.join(reports_dir, fn)
+
+    # Parse what we can
+    if "timing" in candidates:
+        metrics["timing"] = parse_timing_summary(candidates["timing"])
+        metrics["top_violating_paths"] = parse_detailed_timing_paths(candidates["timing"])
+        mt = parse_methodology_and_check_timing(candidates["timing"])
+        if mt:
+            metrics["methodology"] = mt
+
+    if "util" in candidates:
+        metrics["utilization"] = parse_utilization_summary(candidates["util"])
+
+    if "clock" in candidates:
+        metrics["clock"] = parse_clock_utilization_report(candidates["clock"])
+
+    if "power" in candidates:
+        metrics["power"] = parse_power_report(candidates["power"])
+
+    # Also attach a count of available reports
+    try:
+        metrics["reports_found"] = len([f for f in os.listdir(reports_dir) if f.endswith(".rpt")]) if os.path.isdir(reports_dir) else 0
+    except Exception:
+        pass
+
+    return metrics
